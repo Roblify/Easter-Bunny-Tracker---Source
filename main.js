@@ -4,6 +4,8 @@ const ION_TOKEN =
 
 const BASKET_START_DR = 77;
 
+const CITY_PANEL_MIN_DR = 77;
+
 // Minimum zoom distance when UNLOCKED (meters)
 const MIN_ZOOM_DISTANCE_M = 120_000;
 
@@ -120,6 +122,28 @@ function findClosestStopByLocation(stops, lat, lon) {
     }
 
     return best;
+}
+
+// Map Open-Meteo weather codes to plain-English descriptions
+function weatherCodeToText(code) {
+    const c = Number(code);
+    if (!Number.isFinite(c)) return "Unknown conditions";
+
+    if (c === 0) return "Clear sky";
+    if (c === 1 || c === 2) return "Mostly clear";
+    if (c === 3) return "Overcast";
+    if (c === 45 || c === 48) return "Foggy";
+    if (c === 51 || c === 53 || c === 55) return "Light drizzle";
+    if (c === 56 || c === 57) return "Freezing drizzle";
+    if (c === 61 || c === 63 || c === 65) return "Rain";
+    if (c === 66 || c === 67) return "Freezing rain";
+    if (c === 71 || c === 73 || c === 75) return "Snow";
+    if (c === 77) return "Snow grains";
+    if (c === 80 || c === 81 || c === 82) return "Rain showers";
+    if (c === 85 || c === 86) return "Snow showers";
+    if (c === 95) return "Thunderstorm";
+    if (c === 96 || c === 99) return "Thunderstorm with hail";
+    return "Unknown conditions";
 }
 
 async function fetchViewerLocationFromIpInfo() {
@@ -250,14 +274,19 @@ async function loadRoute() {
         UnixArrivalArrival: Number(s["Unix Arrival Arrival"]),
         UnixArrival: Number(s["Unix Arrival"]),
         UnixArrivalDeparture: Number(s["Unix Arrival Departure"]),
-        WikipediaUrl: typeof s["Wikipedia attr"] === "string" ? s["Wikipedia attr"] : null
+        WikipediaUrl: typeof s["Wikipedia attr"] === "string" ? s["Wikipedia attr"] : null,
+        Timezone: typeof s["Timezone"] === "string" ? s["Timezone"] : null,
+
+        PopulationNum: Number(s["Population Num"]),
+        PopulationYear: toNum(s["Population Year"]),
+        ElevationMeter: Number(s["Elevation Meter"])
     }));
 
     stops.sort((a, b) => a.UnixArrivalArrival - b.UnixArrivalArrival);
     return stops;
 }
 
-const MUSIC_VOLUME = 0.1;
+const MUSIC_VOLUME = 0.2;
 
 (async function init() {
     try {
@@ -266,11 +295,13 @@ const MUSIC_VOLUME = 0.1;
             return;
         }
 
+        /*
         const PRE_JOURNEY_START_UTC_MS = Date.UTC(2026, 3, 5, 6, 0, 0);
         if (Date.now() < PRE_JOURNEY_START_UTC_MS) {
             window.location.replace("index.html");
             return;
         }
+        */
 
         Cesium.Ion.defaultAccessToken = ION_TOKEN;
 
@@ -329,6 +360,74 @@ const MUSIC_VOLUME = 0.1;
         let viewerLocation = null;
         let viewerClosestStop = null;
         let viewerEtaError = false;
+
+        // City info panel DOM
+        const cityPanel = $("cityPanel");
+        const cityTitleEl = $("cityTitle");
+        const cityLocalTimeEl = $("cityLocalTime");
+        const cityWeatherEl = $("cityWeather");
+        const cityPopulationEl = $("cityPopulation");
+        const cityElevationEl = $("cityElevation");
+
+        // Live city data state
+        let currentCityStop = null;
+        let currentCityTimezone = null;
+        let currentCityWeatherText = null;
+        let currentCityWeatherFetchPromise = null;
+
+        async function fetchCityLiveWeather(stop) {
+            if (!stop) return null;
+
+            // If we're already fetching for this stop, reuse the promise
+            if (currentCityWeatherFetchPromise && currentCityStop === stop) {
+                return currentCityWeatherFetchPromise;
+            }
+
+            const lat = stop.Latitude;
+            const lon = stop.Longitude;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                return null;
+            }
+
+            const url =
+                `https://api.open-meteo.com/v1/forecast` +
+                `?latitude=${encodeURIComponent(lat)}` +
+                `&longitude=${encodeURIComponent(lon)}` +
+                `&current_weather=true` +
+                `&timezone=auto`;
+
+            currentCityWeatherFetchPromise = (async () => {
+                try {
+                    const res = await fetch(url, { cache: "no-store" });
+                    if (!res.ok) throw new Error(`weather HTTP ${res.status}`);
+                    const data = await res.json();
+                    const cw = data.current_weather;
+                    if (!cw) return null;
+
+                    const tempC = Number(cw.temperature);
+                    const tempF = Number.isFinite(tempC) ? (tempC * 9) / 5 + 32 : NaN;
+                    const code = cw.weathercode;
+                    const conditions = weatherCodeToText(code);
+
+                    currentCityTimezone = data.timezone || null;
+                    currentCityWeatherText = Number.isFinite(tempC) && Number.isFinite(tempF)
+                        ? `${tempC.toFixed(1)} °C / ${tempF.toFixed(1)} °F, ${conditions}`
+                        : conditions || "Unknown";
+
+                    return {
+                        timezone: currentCityTimezone,
+                        weatherText: currentCityWeatherText
+                    };
+                } catch (err) {
+                    console.warn("City weather fetch failed:", err);
+                    currentCityTimezone = null;
+                    currentCityWeatherText = "Unknown";
+                    return null;
+                }
+            })();
+
+            return currentCityWeatherFetchPromise;
+        }
 
         // Show initial "Loading..." if element exists
         const statDurationEl = $("statDuration");
@@ -887,8 +986,144 @@ const MUSIC_VOLUME = 0.1;
             el.textContent = text;
         }
 
+        function updateCityPanel(now, seg) {
+            if (!cityPanel) return;
+
+            // Hide if journey complete; tick() also hides, but this is a guard
+            if (Number.isFinite(FINAL_ARRIVAL) && now >= FINAL_ARRIVAL) {
+                cityPanel.hidden = true;
+                currentCityStop = null;
+                return;
+            }
+
+            // Decide which stop represents the "current city"
+            let s = null;
+
+            if (seg && seg.mode === "stop") {
+                s = stops[seg.i];
+            } else if (seg && seg.mode === "travel") {
+                s = stops[seg.to];
+            } else {
+                // PRE-JOURNEY (seg.mode === "pre") → show first stop
+                s = stops[0];
+            }
+
+            if (!s) {
+                cityPanel.hidden = true;
+                currentCityStop = null;
+                return;
+            }
+
+            const dr = Number(s.DR);
+            // Only show for DR >= CITY_PANEL_MIN_DR
+            if (!Number.isFinite(dr) || dr < CITY_PANEL_MIN_DR) {
+                cityPanel.hidden = true;
+                currentCityStop = null;
+                return;
+            }
+
+            // --- rest of your function stays the same ---
+            cityPanel.hidden = false;
+            currentCityStop = s;
+
+            // Title: "Information about City, Region"
+            if (cityTitleEl) {
+                const city = s.City || "Unknown city";
+                const region = s.Region || "";
+                cityTitleEl.textContent = region
+                    ? `Information about ${city}, ${region}`
+                    : `Information about ${city}`;
+            }
+
+            if (cityPopulationEl) {
+                const pop = Number(s.PopulationNum);
+                const year = s.PopulationYear;
+
+                // Treat 0 or non-finite as "Unknown"
+                if (Number.isFinite(pop) && pop > 0) {
+                    cityPopulationEl.textContent = year
+                        ? `${formatInt(pop)} (as of ${year})`
+                        : formatInt(pop);
+                } else {
+                    cityPopulationEl.textContent = "Unknown";
+                }
+            }
+
+            if (cityElevationEl) {
+                const elev = Number(s.ElevationMeter);
+
+                // Treat 0 or non-finite as "Unknown"
+                if (Number.isFinite(elev) && elev !== 0) {
+                    cityElevationEl.textContent = `${elev.toFixed(0)} m`;
+                } else {
+                    cityElevationEl.textContent = "Unknown";
+                }
+            }
+
+            if (cityLocalTimeEl) {
+                if (currentCityTimezone) {
+                    const nowDate = new Date();
+                    try {
+                        cityLocalTimeEl.textContent = nowDate.toLocaleTimeString(undefined, {
+                            timeZone: currentCityTimezone,
+                            hour: "numeric",
+                            minute: "2-digit"
+                        });
+                    } catch {
+                        cityLocalTimeEl.textContent = nowDate.toLocaleTimeString(undefined, {
+                            hour: "numeric",
+                            minute: "2-digit"
+                        });
+                    }
+                } else {
+                    cityLocalTimeEl.textContent = "Loading…";
+                }
+            }
+
+            if (cityWeatherEl) {
+                if (currentCityWeatherText) {
+                    cityWeatherEl.textContent = currentCityWeatherText;
+                } else {
+                    cityWeatherEl.textContent = "Loading…";
+                }
+            }
+
+            if (currentCityStop === s && !currentCityWeatherText) {
+                fetchCityLiveWeather(s).then((info) => {
+                    if (!info) {
+                        if (cityWeatherEl) cityWeatherEl.textContent = "Unknown";
+                        if (cityLocalTimeEl && !currentCityTimezone) {
+                            cityLocalTimeEl.textContent = "Unknown";
+                        }
+                        return;
+                    }
+
+                    if (cityWeatherEl) cityWeatherEl.textContent = info.weatherText || "Unknown";
+
+                    if (cityLocalTimeEl && info.timezone) {
+                        const nowDate = new Date();
+                        try {
+                            cityLocalTimeEl.textContent = nowDate.toLocaleTimeString(undefined, {
+                                timeZone: info.timezone,
+                                hour: "numeric",
+                                minute: "2-digit"
+                            });
+                        } catch {
+                            cityLocalTimeEl.textContent = nowDate.toLocaleTimeString(undefined, {
+                                hour: "numeric",
+                                minute: "2-digit"
+                            });
+                        }
+                    }
+                });
+            }
+        }
+
         function tick() {
             const now = Date.now() / 1000; // keep fractional seconds
+
+            // Figure out what segment we're in (pre / stop / travel)
+            const seg = findSegment(now);
 
             // ✅ Always add baskets for completed stops, even after DR 1048
             for (const s of stops) {
@@ -901,6 +1136,8 @@ const MUSIC_VOLUME = 0.1;
                 Number.isFinite(FINAL_ARRIVAL) && now >= FINAL_ARRIVAL;
 
             if (journeyComplete) {
+                if (cityPanel) cityPanel.hidden = true;
+
                 // Park bunny at the final stop
                 bunnyEntity.position = Cesium.Cartesian3.fromDegrees(
                     finalStop.Longitude,
@@ -937,12 +1174,11 @@ const MUSIC_VOLUME = 0.1;
                 }
 
                 updateViewerLocationEta(now);
+                // city panel already hidden above
                 return;
             }
 
             // 🔽 Normal behavior before final arrival
-
-            const seg = findSegment(now);
 
             isDelivering = (seg.mode === "stop");
             eggPopEntity.show = isDelivering;
@@ -969,10 +1205,12 @@ const MUSIC_VOLUME = 0.1;
                 });
 
                 followBunnyIfLocked();
+
+                // Still update viewer ETA + city panel in pre-mode
+                updateViewerLocationEta(now);
+                updateCityPanel(now, seg);
                 return;
             }
-
-            // NOTE: no more seg.mode === "done" block
 
             if (seg.mode === "stop") {
                 const s = stops[seg.i];
@@ -1005,10 +1243,7 @@ const MUSIC_VOLUME = 0.1;
                 });
 
                 followBunnyIfLocked();
-                return;
-            }
-
-            if (seg.mode === "travel") {
+            } else if (seg.mode === "travel") {
                 const from = stops[seg.from];
                 const to = stops[seg.to];
                 if (!from || !to) return;
@@ -1049,6 +1284,7 @@ const MUSIC_VOLUME = 0.1;
             }
 
             updateViewerLocationEta(now);
+            updateCityPanel(now, seg);  // 👈 this runs every tick in normal flow
         }
 
         tick();
