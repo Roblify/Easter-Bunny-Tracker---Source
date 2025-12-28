@@ -295,13 +295,11 @@ const MUSIC_VOLUME = 0.2;
             return;
         }
 
-        /*
         const PRE_JOURNEY_START_UTC_MS = Date.UTC(2026, 3, 5, 6, 0, 0);
         if (Date.now() < PRE_JOURNEY_START_UTC_MS) {
             window.location.replace("index.html");
             return;
         }
-        */
 
         Cesium.Ion.defaultAccessToken = ION_TOKEN;
 
@@ -1298,3 +1296,4 @@ const MUSIC_VOLUME = 0.2;
         if (el) el.textContent = "Error (see console)";
     }
 })();
+
