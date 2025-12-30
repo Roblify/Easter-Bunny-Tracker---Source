@@ -4,7 +4,7 @@ const ION_TOKEN =
 
 const BASKET_START_DR = 77;
 
-const CITY_PANEL_MIN_DR = 0;
+const CITY_PANEL_MIN_DR = 77;
 
 // Minimum zoom distance when UNLOCKED (meters)
 const MIN_ZOOM_DISTANCE_M = 120_000;
@@ -1404,3 +1404,4 @@ const MUSIC_VOLUME = 0.2;
         if (el) el.textContent = "Error (see console)";
     }
 })();
+
