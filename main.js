@@ -4,7 +4,7 @@ const ION_TOKEN =
 
 const BASKET_START_DR = 77;
 
-const CITY_PANEL_MIN_DR = 77;
+const CITY_PANEL_MIN_DR = 0;
 
 // Minimum zoom distance when UNLOCKED (meters)
 const MIN_ZOOM_DISTANCE_M = 120_000;
@@ -251,6 +251,23 @@ function cityLabel(stop) {
     return `${city}${region}`;
 }
 
+function statusCityLabel(stop) {
+    if (!stop) return "Unknown";
+
+    const city = stop.City || "Unknown";
+    const region = stop.Region || "";
+    const dr = Number(stop.DR);
+
+    // Hide region if DR is below 76
+    const hideRegion = Number.isFinite(dr) && dr < 76;
+
+    if (hideRegion || !region) {
+        return city; // just "City"
+    }
+
+    return `${city}, ${region}`; // "City, Region"
+}
+
 function toNum(x) {
     const n = Number(x);
     return Number.isFinite(n) ? n : x;
@@ -295,6 +312,7 @@ const MUSIC_VOLUME = 0.2;
             return;
         }
 
+        // CHANGE LATER FOR TESTING PURPOSES
         const PRE_JOURNEY_START_UTC_MS = Date.UTC(2026, 3, 5, 6, 0, 0);
         if (Date.now() < PRE_JOURNEY_START_UTC_MS) {
             window.location.replace("index.html");
@@ -366,6 +384,9 @@ const MUSIC_VOLUME = 0.2;
         const cityWeatherEl = $("cityWeather");
         const cityPopulationEl = $("cityPopulation");
         const cityElevationEl = $("cityElevation");
+        const cityDirectionEl = $("cityDirection");
+
+        let currentTravelDirection = null;
 
         // Live city data state
         let currentCityStop = null;
@@ -984,6 +1005,66 @@ const MUSIC_VOLUME = 0.2;
             el.textContent = text;
         }
 
+        // Compute traveling direction (compass + arrow) given the current segment
+        function computeTravelDirection(fromStop, toStop) {
+            if (!fromStop || !toStop) return null;
+
+            const lat1 = fromStop.Latitude;
+            const lon1 = fromStop.Longitude;
+            const lat2 = toStop.Latitude;
+            const lon2 = toStop.Longitude;
+
+            if (
+                !Number.isFinite(lat1) || !Number.isFinite(lon1) ||
+                !Number.isFinite(lat2) || !Number.isFinite(lon2)
+            ) {
+                return null;
+            }
+
+            const toRad = (d) => (d * Math.PI) / 180;
+            const toDeg = (r) => (r * 180) / Math.PI;
+
+            const φ1 = toRad(lat1);
+            const φ2 = toRad(lat2);
+            const Δλ = toRad(lon2 - lon1);
+
+            const y = Math.sin(Δλ) * Math.cos(φ2);
+            const x =
+                Math.cos(φ1) * Math.sin(φ2) -
+                Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+
+            let brng = toDeg(Math.atan2(y, x)); // -180..+180
+            brng = (brng + 360) % 360;          // 0..360, 0 = North
+
+            const labels = [
+                "North",
+                "North-East",
+                "East",
+                "South-East",
+                "South",
+                "South-West",
+                "West",
+                "North-West"
+            ];
+
+            const arrows = [
+                "↑",  // North
+                "↗",  // NE
+                "→",  // E
+                "↘",  // SE
+                "↓",  // S
+                "↙",  // SW
+                "←",  // W
+                "↖"   // NW
+            ];
+
+            const sector = Math.round(brng / 45) % 8;
+            return {
+                text: labels[sector],
+                arrow: arrows[sector]
+            };
+        }
+
         function updateCityPanel(now, seg) {
             if (!cityPanel) return;
 
@@ -1047,14 +1128,21 @@ const MUSIC_VOLUME = 0.2;
                 }
             }
 
-            if (cityElevationEl) {
-                const elev = Number(s.ElevationMeter);
-
-                // Treat 0 or non-finite as "Unknown"
-                if (Number.isFinite(elev) && elev !== 0) {
-                    cityElevationEl.textContent = `${elev.toFixed(0)} m`;
+            if (cityDirectionEl) {
+                if (currentTravelDirection) {
+                    cityDirectionEl.textContent =
+                        `${currentTravelDirection.text} ${currentTravelDirection.arrow}`;
                 } else {
-                    cityElevationEl.textContent = "Unknown";
+                    cityDirectionEl.textContent = "N/A";
+                }
+            }
+
+            if (cityDirectionEl) {
+                const dirInfo = computeTravelDirection(seg, stops);
+                if (dirInfo) {
+                    cityDirectionEl.textContent = `${dirInfo.text} ${dirInfo.arrow}`;
+                } else {
+                    cityDirectionEl.textContent = "N/A";
                 }
             }
 
@@ -1204,6 +1292,8 @@ const MUSIC_VOLUME = 0.2;
 
                 followBunnyIfLocked();
 
+                currentTravelDirection = null;
+
                 // Still update viewer ETA + city panel in pre-mode
                 updateViewerLocationEta(now);
                 updateCityPanel(now, seg);
@@ -1241,10 +1331,26 @@ const MUSIC_VOLUME = 0.2;
                 });
 
                 followBunnyIfLocked();
+
+                currentTravelDirection = null;
             } else if (seg.mode === "travel") {
                 const from = stops[seg.from];
                 const to = stops[seg.to];
                 if (!from || !to) return;
+
+                const toDr = Number(to.DR);
+
+                // Show region only starting at DR 76+
+                const showRegionInStatus = Number.isFinite(toDr) && toDr >= 76;
+                const destinationLabelForStatus = showRegionInStatus
+                    ? cityLabel(to)   // "City, Region"
+                    : cityOnly(to);   // "City"
+
+                // Add "Heading to:" only starting at DR 76+
+                const showHeadingPrefix = Number.isFinite(toDr) && toDr >= 76;
+                const statusText = showHeadingPrefix
+                    ? `Heading to: ${destinationLabelForStatus}`
+                    : destinationLabelForStatus;
 
                 const departT = from.UnixArrivalDeparture;
                 const arriveT = to.UnixArrivalArrival;
@@ -1262,7 +1368,7 @@ const MUSIC_VOLUME = 0.2;
                 const carrots = lerp(Number(from.CarrotsEaten) || 0, Number(to.CarrotsEaten) || 0, t);
 
                 updateHUD({
-                    status: `Heading to: ${to.City}, ${to.Region}`,
+                    status: statusText,
                     lastText: before77 ? "N/A" : cityLabel(from),
                     nextText: before77 ? cityOnly(to) : cityLabel(to),
                     etaSeconds: etaForHUD(now, arriveT - now),
@@ -1274,6 +1380,8 @@ const MUSIC_VOLUME = 0.2;
                 });
 
                 followBunnyIfLocked();
+
+                currentTravelDirection = computeTravelDirection(from, to);
             }
 
             // While unlocked, re-assert minimum zoom (safe guard)
@@ -1296,4 +1404,3 @@ const MUSIC_VOLUME = 0.2;
         if (el) el.textContent = "Error (see console)";
     }
 })();
-
