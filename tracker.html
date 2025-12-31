@@ -25,8 +25,8 @@
   <meta name="twitter:image"
     content="https://media.discordapp.net/attachments/1216576302673563698/1454749563025096834/Bunny.png?ex=6952389b&is=6950e71b&hm=931a744aae1ca2c84cb26298669c8143ad1ba93e5451cedd58d93dc3c27e1529&=&format=webp&quality=lossless&width=929&height=968">
 
-  <!-- Cesium widgets CSS from CDN -->
-  <link href="https://unpkg.com/cesium/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <!-- Mapbox GL JS CSS -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet" />
 
   <!-- your styles -->
   <link rel="stylesheet" href="style.css" />
@@ -40,22 +40,20 @@
   <!-- Top Stats Bar -->
   <div id="hud" aria-live="polite">
     <div class="hud-title">Easter Bunny Tracker</div>
-    <div class="hud-row"><span>Last stop:</span><span id="statLast">—</span></div>
+    <div class="hud-row"><span>Last spotted:</span><span id="statLast">—</span></div>
     <div class="hud-row"><span>Status:</span><span id="statStatus">Loading…</span></div>
     <div class="hud-row"><span>Arriving in:</span><span id="statEta">—</span></div>
     <div class="hud-row"><span>Delivering for:</span><span id="statStopRemaining">—</span></div>
     <div class="hud-row"><span>Easter Bunny will arrive at your location in about</span><span
         id="statDuration">Loading...</span></div>
-<hr>
+    <hr>
     <div class="hud-row"><span>Traveling speed:</span><span id="statSpeed">—</span></div>
     <div class="hud-row"><span>Eggs delivered:</span><span id="statEggs">—</span></div>
     <div class="hud-row"><span>Carrots eaten:</span><span id="statCarrots">—</span></div>
   </div>
 
-  <script>
-    window.CESIUM_BASE_URL = "https://unpkg.com/cesium/Build/Cesium";
-  </script>
-  <script src="https://unpkg.com/cesium/Build/Cesium/Cesium.js"></script>
+  <!-- Mapbox GL JS script -->
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
   <script src="main.js" defer></script>
 
   <!-- HELP button (bottom-left) -->
@@ -130,6 +128,42 @@
 
             <p class="help-note">
               Some browsers may require you to interact with the page before music can start playing.
+            </p>
+
+            <hr>
+
+            <p>Enable kilometer (km/h) or mile (mph) mode in determining traveling speed.</p>
+
+            <button id="travelSpeedTypeBtn" type="button" class="settings-button" aria-pressed="true">
+              Distance converted in: MPH
+            </button>
+
+            <hr>
+
+            <p>Toggle the map style to your preferance, standard or satellite. By default, standard is the map style,
+              but satellite is a choice for your viewing experience</p>
+
+            <button id="mapStyleBtn" type="button" class="settings-button" aria-pressed="true">
+              Map style: Standard
+            </button>
+
+            <hr>
+
+            <p>Enable streamer mode to hide the "Easter Bunny will arrive at your location in about" feature from
+              viewers. We recommend enabling this if you are re-broadcasting this tracker. This is in order to protect
+              yourself by revoking the ability for viewers of your broadcast to determine your location through the
+              distance fetching feature.</p>
+
+            <button id="streamerModeBtn" type="button" class="settings-button" aria-pressed="true">
+              Streamer Mode: Disabled
+            </button>
+
+            <br>
+
+            <p class="help-note">
+              If you enable streamer mode but then close out the website and re-open it, or you refresh the website,
+              streamer mode will be disabled again. Always be sure to re-enable it if you end up closing the website out
+              or refreshing the website.
             </p>
           </div>
           <div class="help-pane" data-pane="tos">
@@ -239,7 +273,7 @@
       <span id="cityElevation">—</span>
     </div>
     <hr>
-    <footer>Note: The information listed here may not be fully accurate.</footer>
+    <footer>Note: The information listed here may not always be accurate.</footer>
   </div>
 
   <button id="lockBtn" type="button" aria-pressed="true" title="Unlock camera">
