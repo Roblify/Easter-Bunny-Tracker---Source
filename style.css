@@ -131,7 +131,7 @@ body {
 #lockBtn {
   position: absolute;
   right: 12px;
-  bottom: 12px;
+  bottom: 27px;
   z-index: 10000;
 
   background: rgba(20, 20, 24, 0.72);
@@ -425,7 +425,7 @@ body {
 .city-panel {
   position: absolute;
   right: 12px;
-  bottom: 63px;
+  bottom: 75px;
   /* sits just above the lock button (bottom: 12px) */
   z-index: 10000;
 
@@ -449,6 +449,7 @@ body {
   font-weight: 900;
   font-size: 13px;
   margin-bottom: 6px;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   text-align: center;
   /* optional but looks nice */
 }
