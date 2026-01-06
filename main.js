@@ -4,29 +4,72 @@
 // CONFIG
 // =====================
 const MAPBOX_TOKEN = "pk.eyJ1IjoidGhlcm9ibGlmeSIsImEiOiJjbWp0bzMyM2w0em52M2NxMmZhcGc3NnI2In0.gFxRxRimP3V-WhDvZyf-UA"; // <-- put your Mapbox token here
+const WEATHERAPI_KEY = "c8b1cc710316460e83f54057260101";
 
 const BASKET_START_DR = 77;
 const CITY_PANEL_MIN_DR = 77;
 
+const TAKEOFF_DR = 76;
+
 // Camera settings (in Mapbox zoom levels)
 const LOCKED_ZOOM = 5;           // zoom when locked to bunny
-const UNLOCKED_MIN_ZOOM = 1.5;     // min zoom when unlocked
-const UNLOCKED_MAX_ZOOM = 8.0;     // max zoom when unlocked
+const UNLOCKED_MIN_ZOOM = 1.5;   // min zoom when unlocked
+const UNLOCKED_MAX_ZOOM = 8.0;   // max zoom when unlocked
 
 const STARTUP_GRACE_SEC = 20;
 
 const STANDARD_STYLE = "mapbox://styles/mapbox/standard";
 const SATELLITE_STYLE = "mapbox://styles/mapbox/satellite-streets-v12";
 
-let currentStyle = "standard"; // default
-
-// User settings
-let speedUnitMode = "mph";       // "mph" or "kmh"
-let streamerModeEnabled = false; // true = hide personal ETA text
-
-let isDelivering = false; // true only while the Bunny is stopped & delivering
-
 const MUSIC_VOLUME = 0.2;
+
+// =====================
+// PERSISTENT SETTINGS
+// =====================
+const SETTINGS_STORAGE_KEY = "eb_tracker_settings_v1";
+
+function loadSettings() {
+    try {
+        const json = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (!json) return {};
+        const parsed = JSON.parse(json);
+        return (parsed && typeof parsed === "object") ? parsed : {};
+    } catch (e) {
+        console.warn("Failed to load settings from localStorage:", e);
+        return {};
+    }
+}
+
+function saveSettings(partial) {
+    try {
+        const current = loadSettings();
+        const next = { ...current, ...partial };
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
+    } catch (e) {
+        console.warn("Failed to save settings to localStorage:", e);
+    }
+}
+
+// Read once so we can use defaults below
+const initialSettings = loadSettings();
+
+// =====================
+// USER SETTINGS (with defaults)
+// =====================
+
+// Map style persists
+let currentStyle =
+    initialSettings.mapStyle === "satellite" ? "satellite" : "standard";
+
+// Travel speed unit persists
+let speedUnitMode =
+    initialSettings.speedUnitMode === "kmh" ? "kmh" : "mph";
+
+// Streamer mode persists
+let streamerModeEnabled = !!initialSettings.streamerModeEnabled;
+
+// Session-only state
+let isDelivering = false; // true only while the Bunny is stopped & delivering
 
 // =====================
 // GENERIC HELPERS
@@ -281,8 +324,8 @@ function cityOnly(stop) {
         // CHANGE LATER IF YOU WANT PRE-START REDIRECT
         const PRE_JOURNEY_START_UTC_MS = Date.UTC(2026, 3, 5, 6, 0, 0);
         if (Date.now() < PRE_JOURNEY_START_UTC_MS) {
-          window.location.replace("index.html");
-          return;
+            window.location.replace("index.html");
+            return;
         }
 
         // Show initial "Loading..." if element exists
@@ -301,10 +344,9 @@ function cityOnly(stop) {
 
         const map = new mapboxgl.Map({
             container: "cesiumContainer",
-            // Mapbox Standard style (required for dawn/day/dusk/night presets)
-            style: "mapbox://styles/mapbox/standard",
+            style: currentStyle === "satellite" ? SATELLITE_STYLE : STANDARD_STYLE,
             center: [firstStop.Longitude, firstStop.Latitude],
-            zoom: LOCKED_ZOOM,  // something like 1–1.5 for full globe
+            zoom: LOCKED_ZOOM,
             bearing: 0,
             pitch: 0,
             projection: "globe"
@@ -343,6 +385,17 @@ function cityOnly(stop) {
 
         const mapStyleBtn = document.getElementById("mapStyleBtn");
 
+        function updateMapStyleButton() {
+            if (!mapStyleBtn) return;
+
+            const isSatellite = (currentStyle === "satellite");
+
+            mapStyleBtn.setAttribute("aria-pressed", String(isSatellite));
+            mapStyleBtn.textContent = isSatellite
+                ? "Map style: Satellite"
+                : "Map style: Standard";
+        }
+
         function toggleMapStyle() {
 
             // Save current camera
@@ -353,16 +406,13 @@ function cityOnly(stop) {
 
             // Flip mode
             const toSatellite = (currentStyle === "standard");
-
             currentStyle = toSatellite ? "satellite" : "standard";
 
-            // Update button
-            if (mapStyleBtn) {
-                mapStyleBtn.setAttribute("aria-pressed", String(!toSatellite));
-                mapStyleBtn.textContent = toSatellite
-                    ? "Map style: Satellite"
-                    : "Map style: Standard";
-            }
+            // Persist new style
+            saveSettings({ mapStyle: currentStyle });
+
+            // Update button text/aria to match the *new* currentStyle
+            updateMapStyleButton();
 
             // Apply style (will trigger style.load again)
             map.setStyle(toSatellite ? SATELLITE_STYLE : STANDARD_STYLE);
@@ -374,6 +424,8 @@ function cityOnly(stop) {
         }
 
         if (mapStyleBtn) {
+            // Make sure the button reflects the saved style on first load
+            updateMapStyleButton();
             mapStyleBtn.addEventListener("click", toggleMapStyle);
         }
 
@@ -421,11 +473,13 @@ function cityOnly(stop) {
         let currentCityTimezone = null;
         let currentCityWeatherText = null;
         let currentCityWeatherFetchPromise = null;
+        let lastSegMode = null;
+        let lastSegToIndex = null;
 
         async function fetchCityLiveWeather(stop) {
-            if (!stop) return null;
+            if (!stop || !WEATHERAPI_KEY) return null;
 
-            // If we're already fetching for this stop, reuse the promise
+            // Reuse in-flight request if we're already fetching for this stop
             if (currentCityWeatherFetchPromise && currentCityStop === stop) {
                 return currentCityWeatherFetchPromise;
             }
@@ -436,30 +490,44 @@ function cityOnly(stop) {
                 return null;
             }
 
+            // WeatherAPI "current weather" endpoint
             const url =
-                `https://api.open-meteo.com/v1/forecast` +
-                `?latitude=${encodeURIComponent(lat)}` +
-                `&longitude=${encodeURIComponent(lon)}` +
-                `&current_weather=true` +
-                `&timezone=auto`;
+                `https://api.weatherapi.com/v1/current.json` +
+                `?key=${encodeURIComponent(WEATHERAPI_KEY)}` +
+                `&q=${encodeURIComponent(`${lat},${lon}`)}` +
+                `&aqi=no`;
 
             currentCityWeatherFetchPromise = (async () => {
                 try {
                     const res = await fetch(url, { cache: "no-store" });
                     if (!res.ok) throw new Error(`weather HTTP ${res.status}`);
+
                     const data = await res.json();
-                    const cw = data.current_weather;
-                    if (!cw) return null;
 
-                    const tempC = Number(cw.temperature);
-                    const tempF = Number.isFinite(tempC) ? (tempC * 9) / 5 + 32 : NaN;
-                    const code = cw.weathercode;
-                    const conditions = weatherCodeToText(code);
+                    const tempC = Number(data?.current?.temp_c);
+                    const tempF = Number(data?.current?.temp_f);
+                    const rawDesc = data?.current?.condition?.text || "";
+                    const desc = rawDesc || "Unknown conditions";
 
-                    currentCityTimezone = data.timezone || null;
-                    currentCityWeatherText = Number.isFinite(tempC) && Number.isFinite(tempF)
-                        ? `${tempC.toFixed(1)} °C / ${tempF.toFixed(1)} °F, ${conditions}`
-                        : conditions || "Unknown";
+                    // Timezone preference: route's Timezone, then WeatherAPI tz_id
+                    if (typeof stop.Timezone === "string" && stop.Timezone.trim()) {
+                        currentCityTimezone = stop.Timezone.trim();
+                    } else if (typeof data?.location?.tz_id === "string" && data.location.tz_id.trim()) {
+                        currentCityTimezone = data.location.tz_id.trim();
+                    } else {
+                        currentCityTimezone = null;
+                    }
+
+                    if (Number.isFinite(tempC) && Number.isFinite(tempF)) {
+                        currentCityWeatherText =
+                            `${tempC.toFixed(1)} °C / ${tempF.toFixed(1)} °F, ${desc}`;
+                    } else if (Number.isFinite(tempC)) {
+                        const f = (tempC * 9) / 5 + 32;
+                        currentCityWeatherText =
+                            `${tempC.toFixed(1)} °C / ${f.toFixed(1)} °F, ${desc}`;
+                    } else {
+                        currentCityWeatherText = desc || "Unknown";
+                    }
 
                     return {
                         timezone: currentCityTimezone,
@@ -467,7 +535,13 @@ function cityOnly(stop) {
                     };
                 } catch (err) {
                     console.warn("City weather fetch failed:", err);
-                    currentCityTimezone = null;
+
+                    if (typeof stop.Timezone === "string" && stop.Timezone.trim()) {
+                        currentCityTimezone = stop.Timezone.trim();
+                    } else {
+                        currentCityTimezone = null;
+                    }
+
                     currentCityWeatherText = "Unknown";
                     return null;
                 }
@@ -492,13 +566,13 @@ function cityOnly(stop) {
             if (statDurationEl) statDurationEl.textContent = "Unknown";
         });
 
-        // Find when DR 77 begins:
-        // Prefer exact DR 77; fallback to first DR >= 77 if exact doesn't exist
-        const dr77Stop =
-            stops.find(s => Number(s.DR) === BASKET_START_DR) ||
-            stops.find(s => Number(s.DR) >= BASKET_START_DR);
+        // Find when DR 76 (takeoff) begins:
+        // Prefer exact DR 76; fallback to first DR >= 76 if exact doesn't exist
+        const takeoffStop =
+            stops.find(s => Number(s.DR) === TAKEOFF_DR) ||
+            stops.find(s => Number(s.DR) >= TAKEOFF_DR);
 
-        const DR77_ARRIVAL = dr77Stop ? Number(dr77Stop.UnixArrivalArrival) : null;
+        const TAKEOFF_ARRIVAL = takeoffStop ? Number(takeoffStop.UnixArrivalArrival) : null;
 
         // Grab the label span that sits next to #statEta (the first span in that hud-row)
         const statEtaLabelEl = (() => {
@@ -513,22 +587,49 @@ function cityOnly(stop) {
         }
 
         // =====================
-        // MAP MARKERS (BUNNY + BASKETS)
-        // =====================
+// MAP MARKERS (BUNNY + BASKETS)
+// =====================
         let bunnyMarker = null;
         const basketMarkers = new Map();
 
         function createBunnyMarker(initialStop) {
+            // Outer container for bunny + shadow
+            const container = document.createElement("div");
+            container.style.position = "relative";
+            container.style.width = "40px";
+            container.style.height = "40px";
+            container.style.pointerEvents = "none";
+
+            // Shadow element (between map and bunny image)
+            const shadow = document.createElement("div");
+            shadow.style.position = "absolute";
+            shadow.style.left = "50%";
+            shadow.style.bottom = "4px"; // just under the bunny
+            shadow.style.transform = "translateX(-50%)";
+            shadow.style.width = "36px";
+            shadow.style.height = "22px";
+            shadow.style.borderRadius = "50%";
+            shadow.style.background = "radial-gradient(circle, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 70%)";
+            shadow.style.filter = "blur(1px)";
+            shadow.style.opacity = "0.8";
+
+            // Bunny image itself
             const img = document.createElement("img");
             img.src = "Bunny.png";
             img.alt = "Easter Bunny";
+            img.style.position = "absolute";
+            img.style.left = "50%";
+            img.style.bottom = "0";
+            img.style.transform = "translateX(-50%) translateY(4px)";
             img.style.width = "37px";
             img.style.height = "37px";
-            img.style.transform = "translateY(4px)"; // slight adjustment so it sits nice
             img.style.pointerEvents = "none";
 
+            container.appendChild(shadow);
+            container.appendChild(img);
+
             bunnyMarker = new mapboxgl.Marker({
-                element: img,
+                element: container,
                 anchor: "bottom"
             })
                 .setLngLat([initialStop.Longitude, initialStop.Latitude])
@@ -639,9 +740,9 @@ function cityOnly(stop) {
         requestAnimationFrame(updateEggFx);
 
         // =====================
-        // CAMERA LOCK STATE
-        // =====================
-        let isLocked = false;
+        // CAMERA LOCK STATE (not persisted; always defaults to locked)
+// =====================
+        let isLocked = true;
 
         function setLocked(nextLocked) {
             isLocked = !!nextLocked;
@@ -700,7 +801,7 @@ function cityOnly(stop) {
             });
         }
 
-        // Start LOCKED by default
+        // Start LOCKED by default every page load
         setLocked(true);
 
         // =====================
@@ -794,11 +895,11 @@ function cityOnly(stop) {
         }
 
         // ETA override:
-        // Before DR77 happens, statEta counts down to DR77.
-        // After DR77, statEta counts down to "next" like normal.
+        // Before TAKEOFF_ARRIVAL (DR 76), statEta counts down to DR 76.
+        // After that, statEta counts down to "next" like normal.
         function etaForHUD(now, normalEtaSeconds) {
-            if (Number.isFinite(DR77_ARRIVAL) && now < DR77_ARRIVAL) {
-                return DR77_ARRIVAL - now;
+            if (Number.isFinite(TAKEOFF_ARRIVAL) && now < TAKEOFF_ARRIVAL) {
+                return TAKEOFF_ARRIVAL - now;
             }
             return normalEtaSeconds;
         }
@@ -822,7 +923,6 @@ function cityOnly(stop) {
 
             // Still resolving IP / closest stop
             if (!viewerClosestStop) {
-                // Don't spam; leave as "Loading..." until it's ready
                 return;
             }
 
@@ -946,7 +1046,6 @@ function cityOnly(stop) {
                 const pop = Number(s.PopulationNum);
                 const year = s.PopulationYear;
 
-                // Treat 0 or non-finite as "Unknown"
                 if (Number.isFinite(pop) && pop > 0) {
                     cityPopulationEl.textContent = year
                         ? `${formatInt(pop)} (as of ${year})`
@@ -1089,7 +1188,10 @@ function cityOnly(stop) {
         // =====================
         // BACKGROUND MUSIC
         // =====================
-        let musicEnabled = true;
+        let musicEnabled =
+            (typeof initialSettings.musicEnabled === "boolean")
+                ? initialSettings.musicEnabled
+                : true; // default: on
         let bgAudio = null;
         let musicResumePending = false;
 
@@ -1139,6 +1241,7 @@ function cityOnly(stop) {
 
         function setMusicEnabled(next) {
             musicEnabled = !!next;
+            saveSettings({ musicEnabled });
 
             const btn = $("musicToggleBtn");
             if (btn) {
@@ -1203,8 +1306,8 @@ function cityOnly(stop) {
             });
         }
 
-        // Start with music ON by default
-        setMusicEnabled(true);
+        // Start with previously saved music setting (default: on)
+        setMusicEnabled(musicEnabled);
         initBgMusic();
 
         // =====================
@@ -1226,6 +1329,7 @@ function cityOnly(stop) {
         if (travelSpeedTypeBtn) {
             travelSpeedTypeBtn.addEventListener("click", () => {
                 speedUnitMode = (speedUnitMode === "mph") ? "kmh" : "mph";
+                saveSettings({ speedUnitMode });      // persist units
                 updateSpeedUnitButton();
             });
         }
@@ -1245,6 +1349,7 @@ function cityOnly(stop) {
         if (streamerModeBtn) {
             streamerModeBtn.addEventListener("click", () => {
                 streamerModeEnabled = !streamerModeEnabled;
+                saveSettings({ streamerModeEnabled });   // persist
                 updateStreamerModeButton();
 
                 updateViewerLocationEta(Date.now() / 1000);
@@ -1266,6 +1371,31 @@ function cityOnly(stop) {
             isDelivering = false;
 
             const seg = findSegment(now);
+
+            if (seg.mode === "travel") {
+                const isNewTravelSegment =
+                    lastSegMode !== "travel" || lastSegToIndex !== seg.to;
+
+                if (isNewTravelSegment) {
+                    const nextStop = stops[seg.to];
+                    if (nextStop) {
+                        // Reset cached weather state for the new destination
+                        currentCityStop = nextStop;
+                        currentCityWeatherText = null;
+                        currentCityWeatherFetchPromise = null;
+
+                        // Kick off a live weather fetch for the destination city
+                        fetchCityLiveWeather(nextStop);
+                    }
+                }
+
+                lastSegMode = "travel";
+                lastSegToIndex = seg.to;
+            } else {
+                // Not traveling (pre or stop); just remember the mode
+                lastSegMode = seg.mode;
+                lastSegToIndex = null;
+            }
 
             // Always add baskets for completed stops, even after DR 1048
             for (const s of stops) {
@@ -1304,8 +1434,8 @@ function cityOnly(stop) {
                 return;
             }
 
-            const beforeDR77 = Number.isFinite(DR77_ARRIVAL) && now < DR77_ARRIVAL;
-            setEtaLabel(beforeDR77);
+            const beforeTakeoff = Number.isFinite(TAKEOFF_ARRIVAL) && now < TAKEOFF_ARRIVAL;
+            setEtaLabel(beforeTakeoff);
 
             const before77 = isBeforeDR77ForSegment(seg, stops);
 
@@ -1444,4 +1574,3 @@ function cityOnly(stop) {
         if (el) el.textContent = "Error (see console)";
     }
 })();
-
