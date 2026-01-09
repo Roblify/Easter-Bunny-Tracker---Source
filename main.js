@@ -274,7 +274,7 @@ function toNum(x) {
 }
 
 async function loadRoute() {
-    const res = await fetch("./route-testing.json", { cache: "no-store" }); // CHANGE THIS LATER
+    const res = await fetch("./route.json", { cache: "no-store" }); // CHANGE THIS LATER
     if (!res.ok) throw new Error(`Failed to load route.json (${res.status})`);
     const data = await res.json();
 
@@ -1581,3 +1581,4 @@ function cityOnly(stop) {
         if (el) el.textContent = "Error (see console)";
     }
 })();
+
