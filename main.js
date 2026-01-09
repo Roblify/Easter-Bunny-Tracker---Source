@@ -13,7 +13,7 @@ const TAKEOFF_DR = 76;
 
 // Camera settings (in Mapbox zoom levels)
 const LOCKED_ZOOM = 5;           // zoom when locked to bunny
-const UNLOCKED_MIN_ZOOM = 1.5;   // min zoom when unlocked
+const UNLOCKED_MIN_ZOOM = 0.1;   // min zoom when unlocked
 const UNLOCKED_MAX_ZOOM = 8.0;   // max zoom when unlocked
 
 const STARTUP_GRACE_SEC = 20;
@@ -322,13 +322,11 @@ function cityOnly(stop) {
         }
 
         // CHANGE LATER IF YOU WANT PRE-START REDIRECT
-        /*
         const PRE_JOURNEY_START_UTC_MS = Date.UTC(2026, 3, 5, 6, 0, 0);
         if (Date.now() < PRE_JOURNEY_START_UTC_MS) {
             window.location.replace("index.html");
             return;
         }
-        */
 
         // Show initial "Loading..." if element exists
         const statDurationEl = $("statDuration");
